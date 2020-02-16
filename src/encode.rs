@@ -9,7 +9,7 @@ use crate::error::Error;
 
 static TABLE: &[u8] = b"0123456789abcdef";
 
-pub fn hex_string(src: &[u8]) -> Result<String, Error> {
+pub fn hex_string(src: &[u8]) -> String {
     let mut buffer = vec![0; src.len() * 2];
     // should never panic because the destination buffer is large enough.
     hex_encode(src, &mut buffer).unwrap();
