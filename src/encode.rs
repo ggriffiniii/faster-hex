@@ -36,34 +36,6 @@ pub fn hex_encode(src: &[u8], dst: &mut [u8]) -> Result<(), Error> {
     Ok(())
 }
 
-macro_rules! mdbg {
-    ($val:expr) => {
-        match $val {
-            tmp => {
-                //let mut b = [0u8; 32];
-                //_mm256_storeu_si256(b.as_mut_ptr() as *mut _, tmp);
-                //eprintln!("[{}:{}] {} = {:02x?}",
-                //    std::file!(), std::line!(), std::stringify!($val), b);
-                tmp
-            }
-        }
-    };
-}
-
-macro_rules! sdbg {
-    ($val:expr) => {
-        match $val {
-            tmp => {
-                //let mut b = [0u8; 16];
-                //_mm_storeu_si128(b.as_mut_ptr() as *mut _, tmp);
-                //eprintln!("[{}:{}] {} = {:02x?}",
-                //    std::file!(), std::line!(), std::stringify!($val), b);
-                tmp
-            }
-        }
-    };
-}
-
 #[deprecated(since = "0.3.0", note = "please use `hex_encode` instead")]
 pub fn hex_to(src: &[u8], dst: &mut [u8]) -> Result<(), Error> {
     hex_encode(src, dst)
@@ -120,9 +92,6 @@ unsafe fn encode_chunk_avx2(input: __m128i) -> __m256i {
 #[target_feature(enable = "sse4.1")]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 unsafe fn hex_encode_sse41(mut src: &[u8], mut dst: &mut [u8]) {
-    let ascii_zero = _mm_set1_epi8(b'0' as i8);
-    let nines = _mm_set1_epi8(9);
-    let ascii_a = _mm_set1_epi8((b'a' - 9 - 1) as i8);
     let and4bits = _mm_set1_epi8(0xf);
 
     while src.len() >= 16 {
@@ -131,13 +100,15 @@ unsafe fn hex_encode_sse41(mut src: &[u8], mut dst: &mut [u8]) {
         let masked1 = _mm_and_si128(invec, and4bits);
         let masked2 = _mm_and_si128(_mm_srli_epi64(invec, 4), and4bits);
 
-        // return 0xff corresponding to the elements > 9, or 0x00 otherwise
-        let cmpmask1 = _mm_cmpgt_epi8(masked1, nines);
-        let cmpmask2 = _mm_cmpgt_epi8(masked2, nines);
+        let offset_lut = _mm_setr_epi8(
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            87, 87, 87, 87, 87, 87,
+        );
+        let offsets1 = _mm_shuffle_epi8(offset_lut, masked1);
+        let offsets2 = _mm_shuffle_epi8(offset_lut, masked2);
 
-        // add '0' or the offset depending on the masks
-        let masked1 = _mm_add_epi8(masked1, _mm_blendv_epi8(ascii_zero, ascii_a, cmpmask1));
-        let masked2 = _mm_add_epi8(masked2, _mm_blendv_epi8(ascii_zero, ascii_a, cmpmask2));
+        let masked1 = _mm_add_epi8(masked1, offsets1);
+        let masked2 = _mm_add_epi8(masked2, offsets2);
 
         // interleave masked1 and masked2 bytes
         let res1 = _mm_unpacklo_epi8(masked2, masked1);
