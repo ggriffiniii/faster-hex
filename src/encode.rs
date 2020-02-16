@@ -72,79 +72,53 @@ pub fn hex_to(src: &[u8], dst: &mut [u8]) -> Result<(), Error> {
 #[target_feature(enable = "avx2")]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 unsafe fn hex_encode_avx2(mut src: &[u8], mut dst: &mut [u8]) {
-    let ascii_zero = _mm256_set1_epi8(b'0' as i8);
-    let nines = _mm256_set1_epi8(9);
-    let ascii_a = _mm256_set1_epi8((b'a' - 9 - 1) as i8);
-    let and4bits = _mm256_set1_epi8(0xf);
-
-    while src.len() >= 16 {
-        let tmp = _mm_loadu_si128(src.as_ptr() as *const _);
-        sdbg!(tmp);
-        let out1 = _mm_shuffle_epi8(tmp, _mm_setr_epi8(
-            0, 1, 2, 3, 4, 5, 6, 7,
-            0, 1, 2, 3, 4, 5, 6, 7,
-        ));
-        sdbg!(out1);
-        let out2 = _mm_shuffle_epi8(tmp, _mm_setr_epi8(
-            8, 9, 10, 11, 12, 13, 14, 15,
-            8, 9, 10, 11, 12, 13, 14, 15,
-        ));
-        sdbg!(out2);
-        let out3 = _mm256_set_m128i(out2, out1);
-        mdbg!(out3);
-        let out4 = _mm256_srlv_epi64(out3, _mm256_setr_epi64x(4, 0, 4, 0));
-        mdbg!(out4);
-        let out5 = _mm256_and_si256(out4, _mm256_set1_epi8(0xf));
-        mdbg!(out5);
-        let out6 = _mm256_shuffle_epi8(out5, _mm256_setr_epi8(
-            0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15,
-            0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15,
-        ));
-        mdbg!(out6);
-        let out7 = _mm256_add_epi8(out6, _mm256_set1_epi8(b'0' as i8));
-        mdbg!(out7);
-        let gt = _mm256_cmpgt_epi8(out7, _mm256_set1_epi8(b'9' as i8));
-        mdbg!(gt);
-        let out8 = _mm256_and_si256(gt, _mm256_set1_epi8((b'a' - b'9' - 1) as i8));
-        mdbg!(out8);
-        let out9 = _mm256_add_epi8(out8, out7);
-        mdbg!(out9);
-        _mm256_storeu_si256(dst.as_mut_ptr() as *mut _, out9);
-        src = &src[16..];
-        dst = &mut dst[32..];
-        /*
-        // https://stackoverflow.com/questions/47425851/whats-the-difference-between-mm256-lddqu-si256-and-mm256-loadu-si256
-        let invec = _mm256_loadu_si256(src.as_ptr() as *const _);
-
-        let masked1 = _mm256_and_si256(invec, and4bits);
-        let masked2 = _mm256_and_si256(_mm256_srli_epi64(invec, 4), and4bits);
-
-        // return 0xff corresponding to the elements > 9, or 0x00 otherwise
-        let cmpmask1 = _mm256_cmpgt_epi8(masked1, nines);
-        let cmpmask2 = _mm256_cmpgt_epi8(masked2, nines);
-
-        // add '0' or the offset depending on the masks
-        let masked1 = _mm256_add_epi8(masked1, _mm256_blendv_epi8(ascii_zero, ascii_a, cmpmask1));
-        let masked2 = _mm256_add_epi8(masked2, _mm256_blendv_epi8(ascii_zero, ascii_a, cmpmask2));
-
-        // interleave masked1 and masked2 bytes
-        let res1 = _mm256_unpacklo_epi8(masked2, masked1);
-        let res2 = _mm256_unpackhi_epi8(masked2, masked1);
-
-        // Store everything into the right destination now
-        let base = dst.as_mut_ptr().offset(i * 2);
-        let base1 = base.offset(0) as *mut _;
-        let base2 = base.offset(16) as *mut _;
-        let base3 = base.offset(32) as *mut _;
-        let base4 = base.offset(48) as *mut _;
-        _mm256_storeu2_m128i(base3, base1, res1);
-        _mm256_storeu2_m128i(base4, base2, res2);
+    while src.len() >= 32 {
+        let tmp = _mm256_loadu_si256(src.as_ptr() as *const _);
+        _mm256_storeu_si256(dst.as_mut_ptr() as *mut _, encode_chunk_avx2(_mm256_castsi256_si128(tmp)));
+        _mm256_storeu_si256(dst.as_mut_ptr().offset(32) as *mut _, encode_chunk_avx2(_mm256_extracti128_si256(tmp, 1)));
         src = &src[32..];
-        i += 32;
-        */
+        dst = &mut dst[64..];
     }
 
     hex_encode_sse41(src, dst);
+}
+
+#[target_feature(enable="avx2")]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+unsafe fn encode_chunk_avx2(input: __m128i) -> __m256i {
+    sdbg!(input);
+    let out1 = _mm_shuffle_epi8(input, _mm_setr_epi8(
+        0, 1, 2, 3, 4, 5, 6, 7,
+        0, 1, 2, 3, 4, 5, 6, 7,
+    ));
+    sdbg!(out1);
+    let out2 = _mm_shuffle_epi8(input, _mm_setr_epi8(
+        8, 9, 10, 11, 12, 13, 14, 15,
+        8, 9, 10, 11, 12, 13, 14, 15,
+    ));
+    sdbg!(out2);
+    let out3 = _mm256_set_m128i(out2, out1);
+    mdbg!(out3);
+    let out4 = _mm256_srlv_epi64(out3, _mm256_setr_epi64x(4, 0, 4, 0));
+    mdbg!(out4);
+    let out5 = _mm256_and_si256(out4, _mm256_set1_epi8(0xf));
+    mdbg!(out5);
+    let out6 = _mm256_shuffle_epi8(out5, _mm256_setr_epi8(
+        0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15,
+        0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15,
+    ));
+    mdbg!(out6);
+    let offset_lut = _mm256_setr_epi8(
+        48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+        87, 87, 87, 87, 87, 87,
+        48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+        87, 87, 87, 87, 87, 87,
+    );
+    mdbg!(offset_lut);
+    let offsets = _mm256_shuffle_epi8(offset_lut, out6);
+    mdbg!(offsets);
+    let out9 = _mm256_add_epi8(out6, offsets);
+    mdbg!(out9)
 }
 
 // copied from https://github.com/Matherunner/bin2hex-sse/blob/master/base16_sse4.cpp
